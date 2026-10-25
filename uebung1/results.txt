@@ -1,0 +1,119 @@
+How does the runtime grow with the number of grid points n = N^2 ?
+
+In the log-log graph, both the 9-point and 5-point stencils are parallel and linear. The computation times quadruple each time the number of points is quadrupled. The number of memory updates demonstrates stochastic floating, which is not visible in the log-log representation.
+
+./stencil
+Check with u(x,y) = x(1-x) y(1-y), N = 63:
+  5-point: max |Y/h^2 - f| / max |f| = 0.0e+00  OK
+  9-point: max |Y/h^2 - f| / max |f| = 1.6e-04  OK
+
+Runtime of apply_stencil (time in s, million updates per second):
+     N    n = N*N                 5-point                 9-point
+   255      65025    3.347e-05     1942.6    3.341e-05     1946.1
+   511     261121    1.153e-04     2265.0    1.151e-04     2269.1
+  1023    1046529    4.730e-04     2212.7    4.734e-04     2210.5
+  2047    4190209    2.260e-03     1854.4    2.267e-03     1848.1
+
+  
+./stencil_O0 
+Check with u(x,y) = x(1-x) y(1-y), N = 63:
+  5-point: max |Y/h^2 - f| / max |f| = 0.0e+00  OK
+  9-point: max |Y/h^2 - f| / max |f| = 1.6e-04  OK
+
+Runtime of apply_stencil (time in s, million updates per second):
+     N    n = N*N                 5-point                 9-point
+   255      65025    1.434e-03       45.4    1.430e-03       45.5
+   511     261121    5.750e-03       45.4    5.752e-03       45.4
+  1023    1046529    2.317e-02       45.2    2.317e-02       45.2
+  2047    4190209    9.239e-02       45.4    9.236e-02       45.4
+
+
+
+How much memory would the matrix A \in R^{n×n} need for N = 2047 if it were
+stored as a dense matrix (8 Byte per entry)? Compare with the memory of one
+grid function and of the stencil.
+
+For a dense matrix A a total of 8 bytes * 2047 * 2047 * 2047 * 2047 \approx 1.4046 \cdot 10^{14} bytes or approximately 140 TB of memory needed.
+
+The grid function has a dimension of 2049 * 2049 and needs 8 bytes * 2049 * 2049 \approx 32 MB of memory.
+
+The stencil has 3 * 3 elements and needs only 8 * 9 = 72 bytes. 
+  
+Hence, it is never a good idea to store such large matrices as dense matrices.
+  
+for p in 1 2 4 8; do OMP_NUM_THREADS=$p ./stencil_omp; done
+Check with u(x,y) = x(1-x) y(1-y), N = 63:
+  5-point: max |Y/h^2 - f| / max |f| = 0.0e+00  OK
+  9-point: max |Y/h^2 - f| / max |f| = 1.6e-04  OK
+
+Runtime of apply_stencil (time in s, million updates per second):
+     N    n = N*N                 5-point                 9-point
+   255      65025    3.174e-05     2048.7    3.172e-05     2050.0
+   511     261121    1.109e-04     2353.5    1.109e-04     2353.7
+  1023    1046529    4.558e-04     2295.9    4.562e-04     2294.1
+  2047    4190209    2.260e-03     1853.9    2.273e-03     1843.3
+Check with u(x,y) = x(1-x) y(1-y), N = 63:
+  5-point: max |Y/h^2 - f| / max |f| = 0.0e+00  OK
+  9-point: max |Y/h^2 - f| / max |f| = 1.6e-04  OK
+
+Runtime of apply_stencil (time in s, million updates per second):
+     N    n = N*N                 5-point                 9-point
+   255      65025    1.990e-05     3267.9    2.020e-05     3219.4
+   511     261121    5.811e-05     4493.6    5.748e-05     4543.0
+  1023    1046529    2.332e-04     4487.3    2.332e-04     4488.1
+  2047    4190209    1.626e-03     2576.9    1.612e-03     2599.5
+Check with u(x,y) = x(1-x) y(1-y), N = 63:
+  5-point: max |Y/h^2 - f| / max |f| = 0.0e+00  OK
+  9-point: max |Y/h^2 - f| / max |f| = 1.6e-04  OK
+
+Runtime of apply_stencil (time in s, million updates per second):
+     N    n = N*N                 5-point                 9-point
+   255      65025    1.155e-05     5629.4    1.151e-05     5648.5
+   511     261121    4.865e-05     5367.2    5.044e-05     5176.4
+  1023    1046529    1.307e-04     8006.7    1.301e-04     8044.3
+  2047    4190209    1.532e-03     2734.3    1.521e-03     2755.4
+Check with u(x,y) = x(1-x) y(1-y), N = 63:
+  5-point: max |Y/h^2 - f| / max |f| = 0.0e+00  OK
+  9-point: max |Y/h^2 - f| / max |f| = 1.6e-04  OK
+
+Runtime of apply_stencil (time in s, million updates per second):
+     N    n = N*N                 5-point                 9-point
+   255      65025    6.672e-06     9746.0    6.652e-06     9775.3
+   511     261121    2.244e-05    11635.4    2.267e-05    11517.3
+  1023    1046529    1.276e-04     8202.9    1.052e-04     9946.3
+  2047    4190209    1.606e-03     2608.9    1.500e-03     2794.0
+  
+We parallelize the outermost loop using #pragma omp parallel for. 
+
+The iterations are completely independent of each other since the stencil operation only reads from the array U and writes exclusively to disjoint, thread-specific elements of the array Y. 
+
+No thread modifies data that another thread needs to read or write. 
+
+So, the outer loop distribution provides enough work-sharing for the threads. 
+
+How much faster is the program with -O3? What does the compiler do (see
+lecture 3)
+
+The program compiled with -O3 is approximately 40 times faster than its unoptimized counterpart.
+
+Auto-Vectorization (SIMD): Guided by -march=native, the compiler leverages the specific hardware capabilities of the AMD Ryzen 7 5700X (such as AVX2). It packs multiple floating-point operations into a single vector register, executing up to four double precision additions and multiplications simultaneously in a single CPU instruction.
+
+Loop Unrolling and Pipeline Scheduling: The compiler unrolls the innermost loops to reduce the branch overhead. It reorders assembly instructions to hide latencies and maximize instruction-level parallelism (ILP), ensuring that the CPU's execution pipelines remain filled.
+
+Efficient Address Calculation: In the unoptimized -O0 version, every array access U[...] triggers a slow, explicit 2D-to-1D index calculation via multiplication in every iteration. The -O3 flag enables strength reduction, transforming these expensive index operations into fast, sequential pointer increments (pointer arithmetic).
+
+Register Allocation: Instead of constantly pushing and pulling temporary variables (like sum) to and from the slow system stack in memory, the compiler pins these hot variables directly into the CPU's high-speed registers.
+
+Compute the speedup Sp = T_1/T_p for N = 2047. Is the speedup ideal?
+ 
+No. We would expect to double the execution speed by doubling the number of threads. Instead we observe values of 1.00, 1.39, 1.48, and 1.41 for 5-point stencil and 1.00, 1.41, 1.49, and 1.52 for the 9-point stencil (for 1, 2, 4, and 8 threads respectively). 
+
+Explain your
+observation (see lecture 3). 
+
+The program is memory-bound. Once the fast L3 cache (32 MB) is full, the performance is limited by the bandwidth of the memory interface. At this point, the memory controller becomes a bottleneck. Consequently, using more than 4 cores results in no further runtime improvement, because the additional threads have to wait for data from the RAM.
+   
+Note the CPU of your computer (e.g. with lscpu); many
+laptops have cores of different speed.
+
+Ryzen 7 5700X (8C/16T)
