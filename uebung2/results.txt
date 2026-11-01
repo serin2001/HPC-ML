@@ -1,0 +1,105 @@
+How many floating point operations are
+needed per update? 
+
+9 multiplications + 8 additions = 17 FLOPs per update
+
+How many Byte per update have to be transferred between the
+main memory and the cache if three consecutive rows of U fit into the cache, and
+how many otherwise? Take the write allocate into account and compare with the
+Jacobi sweep
+
+1 LOAD + 1 STORE = 16 Byte for Y
+1 LOAD = 8 Byte for U
+Total: 24 Byte per update if three rows fit into the cache
+
+1 LOAD + 1 STORE = 16 Byte for Y
+3 LOAD = 24 Byte for U
+Total: 40 Byte per update if three rows don't fit into the cache
+
+The code achieves optimal efficiency, requiring the same minimal data transfer (24 bytes per update) as the best theoretical variant of the Jacobi method
+
+Reformulate the layer condition: N_x < C / 48 - 2
+L1 = 32768 Byte N_x = 680
+L2 = 1048576 Byte N_x = 21843
+L3 = 25165824 Byte N_x = 524285
+
+For Ryzen 5700X
+L1 = 32768 Byte N_x = 680
+L2 = 524268 Byte N_x = 10920
+L3 = 33554432 Byte N_x = 699048
+
+Assume a memory bandwidth of bs = 40 GB/s and a maximal performance of
+Pmax = 50 GFlop/s. For the Jacobi sweep and for the nine-point stencil, com-
+pute the computational intensity I (in Flop/Byte) and the expected performance
+P = min(Pmax, I · bs) of the roofline model, each for the case with and without
+layer condition (for the nine-point stencil with your result from (a)). Convert P into
+million updates per second. 
+
+
+Algorithm	FLOPs / Update	Bytes / Update	intensity \(I\) (Flop/Byte)	expected Performance \(P\) (GFlop/s)	Performance in MUPs/s
+Jacobi (with LC)	4	24	4/24 \approx 0,167	0,167 x 40 = 6,67	6,67 / 4 = 1666,7	
+Jacobi (without LC)	4	40	4/40 = 0,1	0,1 x 40 = 4,00	4,00 / 4 = 1000,0	
+9-Pt Stencil (with LC)	17	24	17/24 \approx 0,708	0,708 x 40 = 28,33	28,33 / 17 = 1666,7	
+9-Pt Stencil (without LC)	17	40	17/40 = 0,425	0,425 x 40 = 17,00	17,00 / 17 = 1000,0	
+
+Jacobi sweep: 1 multiplication + 3 additions = 4 FLOPs per update
+
+Are the two loops memory-bound or compute-bound?
+All scenarios are memory-bound
+
+Up to how many Flop per update would a stencil with 24 Byte per update remain
+memory-bound?
+We have Pmax / bs = 50 GFLOPs / 40 GB/s = 1.25 FLOP/Byte
+Since I = Fmax / 24 Byte = 1.25 FLOP/Byte => Fmax = 30 FLOPs
+A stencil with 24 Byte per update remains memory-bound up to 30 FLOPs per update
+
+Plot the performance over Nx (logarithmic Nx-axis). For which Nx does the
+performance drop? Compare with the layer conditions for your computer from
+Task 1(b).
+
+The performance drops after the L3 cache is exhausted. We observe a massive drop at Nx = 524288
+We observe also a moderate drop at Nx = 16384 after the L2 cache is exhausted.
+
+Compute the bandwidth actually used by the sweep: measured updates per
+second times 24 Byte (short rows) or 40 Byte (long rows). 
+1646 MUPs x 24 Byte = 39.5 GB/s
+1028 MUPs x 40 Byte = 41.1 GB/s
+
+Compare with bs.
+Observed bs \approx 40 GB/s are fitting to predictions very well.
+
+Compare the measurements also with the roofline prediction of bs/24 B and
+bs/40 B updates per second from Task 1(c).
+
+Since the algorithm is strictly memory-bound, comparing the calculated bandwidth with bs is mathematically equivalent to comparing the measured updates with the roofline predictions 
+bs / 24 B and bs / 40 B. Both perspectives confirm that the implementation achieves virtually 100% of the practical memory bandwidth limit.
+
+Implement jacobi_sweep_blocked with spatial blocking (lecture 5): split the inte-
+rior columns i = 1, . . . , Nx into blocks of width B (the last block may be shorter)
+and, for each block, run the sweep over all rows j = 1, . . . , Ny. Choose B such
+that the layer condition for the L3 cache of your computer holds (with B instead
+of Nx) and run ./jacobi B, e.g. ./jacobi 10000. The program then also checks
+and measures the blocked version; both versions are measured alternately. Compare
+with the version without blocking.
+
+There is no optimal value for B. We observe a plateau from 16384 to 524288 for the blocked updates, where the layer condition for the shared L3 cache remains satisfied.  
+
+Parallelize both functions with OpenMP; in jacobi_sweep_blocked, parallelize the
+loop over the rows inside the loop over the blocks. Compile with make jacobi_omp
+and run the program with p = 1, 2, 4 threads (and 8, if your computer has at least 8
+cores):
+for p in 1 2 4; do OMP_NUM_THREADS=$p ./jacobi_omp 10000; done
+Does the blocking still help with several threads? 
+
+Yes. The blocking provides a significant performance improvement across all tested thread configurations (1 to 8 threads). 
+In the rightmost part of the graph (long rows), the blocked curves consistently outperform their unblocked counterparts, preventing the severe performance degradation seen in the baseline version.
+
+For which Nx does the performance
+of the version without blocking drop now? Explain this with the layer condition per
+thread (see lecture 5)
+
+The layer condition per thread explains the chaotic behavior at the right end of the graph:
+For moderate row lengths, more threads lead to an earlier performance drop because the shared L3 cache is exhausted faster by concurrent threads.
+
+However, for the longest rows (N_x = 2097152), the grid becomes extremely flat (N_y = 8). Since OpenMP splits these few rows among the threads, each thread only processes 1 or 2 rows. 
+This eliminates vertical cache eviction for the unblocked version, causing the multi-threaded unblocked curves to slightly recover at the very edge.
