@@ -31,8 +31,12 @@
 void jacobi_sweep(int Nx, int Ny, double *U, double *V)
 {
     /* TODO (a); in part (d), parallelize it with OpenMP */
+    int L = Nx + 2;
+    #pragma omp parallel for schedule(static)
+    for (int j = 1; j <= Ny; j++)
+        for (int i = 1; i <= Nx; i++) 
+            V[j * L + i] = 0.25 * (U[(j -1)* L + i] + U[j * L + i - 1] + U[j * L + i + 1] + U[(j + 1) * L + i]);
 }
-
 
 /* ------------------------------------------------------------------------ */
 /* (c) the same sweep with spatial blocking of the i-loop                   */
@@ -44,8 +48,15 @@ void jacobi_sweep(int Nx, int Ny, double *U, double *V)
 void jacobi_sweep_blocked(int Nx, int Ny, int B, double *U, double *V)
 {
     /* TODO (c); in part (d), parallelize it with OpenMP */
+    int L = Nx + 2;    
+    for (int i = 1; i <= Nx; i += B) {
+        int i_end = (i + B - 1 < Nx) ? i + B - 1 : Nx;
+        #pragma omp parallel for schedule(static)
+        for (int j = 1; j <= Ny; j++)        
+            for (int ii = i; ii <= i_end; ii++) 
+                V[j * L + ii] = 0.25 * (U[(j -1)* L + ii] + U[j * L + ii - 1] + U[j * L + ii + 1] + U[(j + 1) * L + ii]);
+    }
 }
-
 
 /* ======================================================================== */
 /* Everything below is given.                                               */
