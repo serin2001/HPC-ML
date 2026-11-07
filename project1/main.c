@@ -1,6 +1,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <time.h>
+#include <string.h>
 #include "jacobi.h"
 
 /* ========================================================================= */
@@ -245,6 +246,7 @@ int main(int argc, char **argv)
     int Ny = 2048; // 512; // 128; // 32;
     double epsilon = 1e-4;
     double *U = new_array((Nx + 2) * (Ny + 2));
+    double *U_master = new_array((Nx + 2) * (Ny + 2));
     //for (int i = 0; i < (Nx + 2) * (Ny + 2); i++) U[i] = 1.0;
     //for (int i = 0; i < Nx + 2; i++) {
     //U[i] = 0.0;          // Unterer Rand (j = 0)
@@ -261,10 +263,10 @@ for (int j = 0; j < Ny + 2; j++) {
         
         // Prüfen, ob wir uns am Rand befinden
         if (i == 0 || i == Nx + 1 || j == 0 || j == Ny + 1) {
-            U[idx] = 0.0; // Randbedingung
+            U_master[idx] = 0.0; // Randbedingung
         } else {
             // Zufallswert zwischen 0.0 und 1.0
-            U[idx] = (double)rand() / (double)RAND_MAX; 
+            U_master[idx] = (double)rand() / (double)RAND_MAX; 
         }
     }
 }
@@ -290,13 +292,8 @@ for (int j = 0; j < Ny + 2; j++) {
     // print_performance_table_cpu(&S5D, k_sweeps, B);
 
     JacobiResult result;
-    result = solve_jacobi(Nx, Ny, &S5, U, maxIter, epsilon);
 
-printf("Stencil: %s\n", S5.name);
-printf("Gitter: %d x %d\n", Nx, Ny);
-printf("Dauer für %d Sweeps: %f Sekunden\n", result.iterations_completed, result.elapsed_time);
-printf("Residualnorm (L2): %f\n", result.final_residual);
-
+    memcpy(U, U_master, (Nx + 2) * (Ny + 2) * sizeof(double));
 result = solve_jacobi(Nx, Ny, &S9, U, maxIter, epsilon);
 
 printf("Stencil: %s\n", S9.name);
@@ -304,6 +301,15 @@ printf("Gitter: %d x %d\n", Nx, Ny);
 printf("Dauer für %d Sweeps: %f Sekunden\n", result.iterations_completed, result.elapsed_time);
 printf("Residualnorm (L2): %f\n", result.final_residual);
 
+    memcpy(U, U_master, (Nx + 2) * (Ny + 2) * sizeof(double));
+    result = solve_jacobi(Nx, Ny, &S5, U, maxIter, epsilon);
+
+printf("Stencil: %s\n", S5.name);
+printf("Gitter: %d x %d\n", Nx, Ny);
+printf("Dauer für %d Sweeps: %f Sekunden\n", result.iterations_completed, result.elapsed_time);
+printf("Residualnorm (L2): %f\n", result.final_residual);
+
+memcpy(U, U_master, (Nx + 2) * (Ny + 2) * sizeof(double));
 result = solve_jacobi(Nx, Ny, &S5D, U, maxIter, epsilon);
 
 printf("Stencil: %s\n", S5D.name);
@@ -311,7 +317,7 @@ printf("Gitter: %d x %d\n", Nx, Ny);
 printf("Dauer für %d Sweeps: %f Sekunden\n", result.iterations_completed, result.elapsed_time);
 printf("Residualnorm (L2): %f\n", result.final_residual);
 
-    // // 5. Kompakte Zusammenfassung am Ende
+// // 5. Kompakte Zusammenfassung am Ende
     // printf("\n--- SUMMARY (Nx=1024, Ny=1024, k=%d) ---\n", k_sweeps);
     // printf("CPU S5 : %.1f Mups/s\n", get_single_run_mups_cpu(1024, 1024, B, &S5, k_sweeps));
     // printf("CPU S9 : %.1f Mups/s\n", get_single_run_mups_cpu(1024, 1024, B, &S9, k_sweeps));
