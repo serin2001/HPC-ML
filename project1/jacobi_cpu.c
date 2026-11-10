@@ -1,22 +1,17 @@
 /*
- * Exercise 2, programming task: one Jacobi sweep for the five-point stencil,
- * layer condition and spatial blocking
+ * Project 1, CPU part: Jacobi sweeps for the five-point stencil and for
+ * general 3x3 stencils, spatial blocking, and the Jacobi solver with k sweeps.
  * HPC for ML, WS 2026/27
- *
- * Compile: make        (builds jacobi and jacobi_omp)
- * Run:     ./jacobi             only the version without blocking
- *          ./jacobi B           also the blocked version with block width B
- *          OMP_NUM_THREADS=4 ./jacobi_omp B
  *
  * Grid: Nx interior points in x-direction (index i), Ny interior points in
  * y-direction (index j). A grid function is stored INCLUDING the boundary
  * points in an array of length (Nx+2)*(Ny+2), row by row:
  *     u_{i,j} = U[j*(Nx+2) + i],   i = 0,...,Nx+1,  j = 0,...,Ny+1.
- * One row (fixed j) is contiguous in memory and has length Nx+2.
- * (In the lecture, the inner index is called j and the row length jmax.)
  *
- * One Jacobi sweep for -Laplace(u) = 0 computes for all interior points
- *     V_{i,j} = 1/4 ( U_{i-1,j} + U_{i+1,j} + U_{i,j-1} + U_{i,j+1} ).
+ * General sweep for a stencil S (multiplied by h^2) with centre coefficient sc:
+ *     V_{i,j} = U_{i,j} - (1/sc) (S U)_{i,j}
+ * Stencil orientation as in Exercise 1 (see stencils.h):
+ *     matrix[0][.] = row j+1, matrix[1][.] = row j, matrix[2][.] = row j-1.
  */
 #include <stdio.h>
 #include <stdlib.h>
@@ -26,164 +21,172 @@
 #include "stencils.h"
 #include "jacobi.h"
 
+/* The nine stencil weights are copied into local variables before the loops.
+ * Otherwise the compiler has to assume that writing V may change S->matrix
+ * (aliasing) and reloads all nine weights for every grid point. */
+#define LOAD_STENCIL(S)                                                       \
+    const double s00 = (S)->matrix[0][0], s01 = (S)->matrix[0][1],            \
+                 s02 = (S)->matrix[0][2], s10 = (S)->matrix[1][0],            \
+                 s11 = (S)->matrix[1][1], s12 = (S)->matrix[1][2],            \
+                 s20 = (S)->matrix[2][0], s21 = (S)->matrix[2][1],            \
+                 s22 = (S)->matrix[2][2]
+
+/* (S U)_{i,j}; row j+1 belongs to matrix[0], row j-1 to matrix[2] */
+#define APPLY_STENCIL(U, idx, L)                                              \
+    (  s00 * U[(idx) + (L) - 1] + s01 * U[(idx) + (L)] + s02 * U[(idx) + (L) + 1] \
+     + s10 * U[(idx)       - 1] + s11 * U[(idx)      ] + s12 * U[(idx)       + 1] \
+     + s20 * U[(idx) - (L) - 1] + s21 * U[(idx) - (L)] + s22 * U[(idx) - (L) + 1])
+
 /* ------------------------------------------------------------------------ */
-/* (a) one Jacobi sweep V = J(U)                                            */
+/* Five-point Jacobi sweep (Exercise 2)                                     */
 /* ------------------------------------------------------------------------ */
 
 /* The boundary values of V are not changed. */
 void jacobi_sweep(int Nx, int Ny, double *U, double *V)
 {
-    /* TODO (a); in part (d), parallelize it with OpenMP */
     int L = Nx + 2;
     #pragma omp parallel for schedule(static)
     for (int j = 1; j <= Ny; j++)
-        for (int i = 1; i <= Nx; i++) 
-            V[j * L + i] = 0.25 * (U[(j -1)* L + i] + U[j * L + i - 1] + U[j * L + i + 1] + U[(j + 1) * L + i]);
+        for (int i = 1; i <= Nx; i++)
+            V[j * L + i] = 0.25 * (U[(j - 1) * L + i] + U[j * L + i - 1]
+                                 + U[j * L + i + 1] + U[(j + 1) * L + i]);
 }
+
+void jacobi_sweep_blocked(int Nx, int Ny, int B, double *U, double *V)
+{
+    int L = Nx + 2;
+    for (int i0 = 1; i0 <= Nx; i0 += B) {
+        int i1 = (i0 + B - 1 < Nx) ? i0 + B - 1 : Nx;   /* last block shorter */
+        #pragma omp parallel for schedule(static)
+        for (int j = 1; j <= Ny; j++)
+            for (int i = i0; i <= i1; i++)
+                V[j * L + i] = 0.25 * (U[(j - 1) * L + i] + U[j * L + i - 1]
+                                     + U[j * L + i + 1] + U[(j + 1) * L + i]);
+    }
+}
+
+/* ------------------------------------------------------------------------ */
+/* General 3x3 stencil                                                      */
+/* ------------------------------------------------------------------------ */
 
 void jacobi_sweep_generic(int Nx, int Ny, const Stencil *S, const double *U, double *V)
 {
     int L = Nx + 2;
-    double inv_sc = 1.0 / S->sc;
+    LOAD_STENCIL(S);
+    const double inv_sc = 1.0 / s11;
 
     #pragma omp parallel for schedule(static)
     for (int j = 1; j <= Ny; j++) {
         for (int i = 1; i <= Nx; i++) {
-            // Explizites Ausmultiplizieren der 3x3-Nachbarschaft (Vektorisierungs-freundlich)
-            double SU = 
-                S->matrix[0][0] * U[(j - 1) * L + i - 1] + S->matrix[0][1] * U[(j - 1) * L + i] + S->matrix[0][2] * U[(j - 1) * L + i + 1] +
-                S->matrix[1][0] * U[    j     * L + i - 1] + S->matrix[1][1] * U[    j     * L + i] + S->matrix[1][2] * U[    j     * L + i + 1] +
-                S->matrix[2][0] * U[(j + 1) * L + i - 1] + S->matrix[2][1] * U[(j + 1) * L + i] + S->matrix[2][2] * U[(j + 1) * L + i + 1];
-
-            V[j * L + i] = U[j * L + i] - (SU * inv_sc);
+            int idx = j * L + i;
+            V[idx] = U[idx] - inv_sc * APPLY_STENCIL(U, idx, L);
         }
     }
 }
 
-/* ------------------------------------------------------------------------ */
-/* (c) the same sweep with spatial blocking of the i-loop                   */
-/* ------------------------------------------------------------------------ */
-
-/* The interior columns i = 1,...,Nx are split into blocks of width B (the
- * last block may be shorter). For each block, the sweep runs over all rows j,
- * so only three rows of length B have to stay in the cache. */
-void jacobi_sweep_blocked(int Nx, int Ny, int B, double *U, double *V)
-{
-    /* TODO (c); in part (d), parallelize it with OpenMP */
-    int L = Nx + 2;    
-    for (int i = 1; i <= Nx; i += B) {
-        int i_end = (i + B - 1 < Nx) ? i + B - 1 : Nx;
-        #pragma omp parallel for schedule(static)
-        for (int j = 1; j <= Ny; j++)        
-            for (int ii = i; ii <= i_end; ii++) 
-                V[j * L + ii] = 0.25 * (U[(j -1)* L + ii] + U[j * L + ii - 1] + U[j * L + ii + 1] + U[(j + 1) * L + ii]);
-    }
-}
-void jacobi_sweep_blocked_generic(int Nx, int Ny, int B, const Stencil *S, const double *U, double *V)
+void jacobi_sweep_blocked_generic(int Nx, int Ny, int B, const Stencil *S,
+                                  const double *U, double *V)
 {
     int L = Nx + 2;
-    double inv_sc = 1.0 / S->sc;
+    LOAD_STENCIL(S);
+    const double inv_sc = 1.0 / s11;
 
-    for (int i_block = 1; i_block <= Nx; i_block += B) {
-        int i_end = (i_block + B - 1 < Nx) ? i_block + B - 1 : Nx;
-
+    for (int i0 = 1; i0 <= Nx; i0 += B) {
+        int i1 = (i0 + B - 1 < Nx) ? i0 + B - 1 : Nx;
         #pragma omp parallel for schedule(static)
         for (int j = 1; j <= Ny; j++) {
-            for (int i = i_block; i <= i_end; i++) {
-                double SU = 
-                    S->matrix[0][0] * U[(j - 1) * L + i - 1] + S->matrix[0][1] * U[(j - 1) * L + i] + S->matrix[0][2] * U[(j - 1) * L + i + 1] +
-                    S->matrix[1][0] * U[    j     * L + i - 1] + S->matrix[1][1] * U[    j     * L + i] + S->matrix[1][2] * U[    j     * L + i + 1] +
-                    S->matrix[2][0] * U[(j + 1) * L + i - 1] + S->matrix[2][1] * U[(j + 1) * L + i] + S->matrix[2][2] * U[(j + 1) * L + i + 1];
-
-                V[j * L + i] = U[j * L + i] - (SU * inv_sc);
+            for (int i = i0; i <= i1; i++) {
+                int idx = j * L + i;
+                V[idx] = U[idx] - inv_sc * APPLY_STENCIL(U, idx, L);
             }
         }
     }
 }
 
-// Berechnet die L1-Norm (Summe der Beträge) des Residuums
-double compute_norm_l1(int Nx, int Ny, const Stencil *S, const double *U) {
+/* L1 norm of the residual  r = S U  (right-hand side f = 0) */
+double compute_norm_l1(int Nx, int Ny, const Stencil *S, const double *U)
+{
     int L = Nx + 2;
+    LOAD_STENCIL(S);
     double total_sum = 0.0;
 
-    // OpenMP parallelisiert die Schleife und führt die Summen-Reduktion sicher aus
     #pragma omp parallel for reduction(+:total_sum) schedule(static)
-    for (int j = 1; j <= Ny; j++) {
+    for (int j = 1; j <= Ny; j++)
         for (int i = 1; i <= Nx; i++) {
-            // 1. Lokales Residuum r = A*U (da f = 0)
-            double SU = 
-                S->matrix[0][0] * U[(j - 1) * L + i - 1] + S->matrix[0][1] * U[(j - 1) * L + i] + S->matrix[0][2] * U[(j - 1) * L + i + 1] +
-                S->matrix[1][0] * U[    j     * L + i - 1] + S->matrix[1][1] * U[    j     * L + i] + S->matrix[1][2] * U[    j     * L + i + 1] +
-                S->matrix[2][0] * U[(j + 1) * L + i - 1] + S->matrix[2][1] * U[(j + 1) * L + i] + S->matrix[2][2] * U[(j + 1) * L + i + 1];
-
-            // 2. Absolutbetrag aufaddieren
-            total_sum += fabs(SU);
+            int idx = j * L + i;
+            total_sum += fabs(APPLY_STENCIL(U, idx, L));
         }
-    }
     return total_sum;
 }
 
+/* ------------------------------------------------------------------------ */
+/* Jacobi solver: up to kmax sweeps with pointer swap (ping-pong)           */
+/* ------------------------------------------------------------------------ */
 
-JacobiResult solve_jacobi(int Nx, int Ny, const Stencil *S, double *U_start, int kmax, double epsilon) {
+/* U_start: initial values incl. boundary; on return it contains the result
+ *          (also for an odd number of sweeps).
+ * check_every: the residual is computed only every check_every sweeps
+ *          (0: never, then exactly kmax sweeps are done). Computing it reads
+ *          U and V once more, which costs about as much as a whole sweep,
+ *          so it must not be done after every sweep when measuring times.
+ * The residual is r = sc (U_old - V_new) = S U_old, i.e. the residual of the
+ * iterate BEFORE the last sweep (it comes for free from the sweep). */
+JacobiResult solve_jacobi(int Nx, int Ny, const Stencil *S, double *U_start,
+                          int kmax, double epsilon, int check_every)
+{
     int L = Nx + 2;
-    int total_size = L * (Ny + 2);
-    
-    // Wir brauchen ein zweites Array V für das Ping-Pong-Verfahren
-    double n = (double) Nx * Ny;
-    double res_norm = 10000000.0;
-    double center_D = S->matrix[1][1];
+    size_t total_size = (size_t) L * (Ny + 2);
+    double sc = S->matrix[1][1];
+    double res_norm = -1.0;          /* -1: not computed */
 
-    double *V = new_array((Nx + 2) * (Ny + 2));
+    /* second array; it must have the same boundary values as U */
+    double *V_buf = new_array((int) total_size);
+    memcpy(V_buf, U_start, total_size * sizeof(double));
 
-    memcpy(V, U_start, total_size * sizeof(double));
-
-    // Lokale Pointer für das fehlerfreie Ping-Pong-Verfahren
     double *U = U_start;
-    double *V_next = V;
-    double t0 = wtime();  
-    int k = 0;
-    for (k = 0; k < kmax; k++) {
-        // Führe den Sweep aus
-        jacobi_sweep_generic(Nx, Ny, S, U, V_next);
+    double *V = V_buf;
 
-        double local_sum = 0.0;
-            #pragma omp parallel for reduction(+:local_sum) schedule(static)
-            for (int j = 1; j <= Ny; j++) {
+    double t0 = wtime();
+    int k;
+    for (k = 0; k < kmax; k++) {
+        jacobi_sweep_generic(Nx, Ny, S, U, V);
+
+        int check = (check_every > 0) && ((k + 1) % check_every == 0);
+        if (check) {
+            double sum = 0.0;
+            #pragma omp parallel for reduction(+:sum) schedule(static)
+            for (int j = 1; j <= Ny; j++)
                 for (int i = 1; i <= Nx; i++) {
                     int idx = j * L + i;
-                    // Residuum r = D * (U_alt - V_neu)
-                    double r_local = center_D * (U[idx] - V_next[idx]);
-                    local_sum += r_local * r_local;
+                    double r = sc * (U[idx] - V[idx]);
+                    sum += r * r;
                 }
-            }
-            res_norm = sqrt(local_sum);
-            if (k%10 == 9) printf("Residuum nach %d Iterationen: %f \n", k, res_norm);
+            res_norm = sqrt(sum);
+        }
 
-        // Zeigertausch (Ping-Pong) -> Kostet O(1) Zeit
+        /* pointer swap: U points to the newest iterate */
         double *tmp = U;
-        U = V_next;
-        V_next = tmp;
-        
-        if (res_norm < epsilon) {
-            k++; // Den aktuell beendeten Sweep mitzählen
+        U = V;
+        V = tmp;
+
+        if (check && res_norm < epsilon) {
+            k++;                      /* count the sweep just finished */
             break;
         }
     }
-    double t = (wtime() - t0);
-    // Ergebnis strukturieren
+    double t = wtime() - t0;
+
+    /* After an odd number of sweeps the result is in V_buf: copy it back,
+     * so that the result is always in U_start. V_buf can then always be
+     * freed (before, the result itself was freed in this case). */
+    if (U != U_start)
+        memcpy(U_start, U, total_size * sizeof(double));
+    free(V_buf);
+
     JacobiResult res;
     res.iterations_completed = k;
-    res.elapsed_time = t; //end_time - start_time;
-    res.final_residual = res_norm; // Berechnen wir im nächsten Schritt
-    res.sol_ptr = U;      // Zeigt auf das aktuellste Ergebnis
-
-    // Wichtig: V_next zeigt jetzt auf das "alte" oder ungenutzte Array, 
-    // aber wir müssen aufpassen, dass wir den originalen malloc-Pointer freigeben!
-    // Am besten bufferst du den originalen V_buffer Pointer, um ihn hier zu free'n.
-    if (U == U_start) {
-        free(V_next); // Wenn U_curr wieder vorn steht, ist V_next das temporäre Array
-    } else {
-        free(U); // Andernfalls ist U_curr das temporäre Array
-    }
+    res.elapsed_time = t;            /* without the final copy */
+    res.final_residual = res_norm;
+    res.sol_ptr = U_start;
     return res;
 }
